@@ -8,6 +8,9 @@ export class Map {
         this.scene = scene;
         this.roadSegments = []; // Store detailed road segment data
         this.buildings = []; // Store placed building data for collision checks
+        this.roads = [];
+        this.roundabouts = [];
+        this.trees = []; // Store tree data for collision detection
         
         // Create ground
         this.createGround();
@@ -623,6 +626,18 @@ export class Map {
         const approxLength = this.getApproximateCurveLength(curve, 10);
         const curveSegments = Math.max(20, Math.floor(approxLength / 5));
         
+        // Store road segment data for passenger/destination placement
+        this.roadSegments.push({
+            start: { x: start.x, z: start.z },
+            end: { x: end.x, z: end.z },
+            controlPoints: controlPoints.map(cp => ({ x: cp.x, z: cp.z })),
+            width: width,
+            length: approxLength,
+            type: 'curved',
+            roadType: roadType,
+            curve: curve
+        });
+        
         // Create a flat shape for the road width
         const roadShape = new THREE.Shape();
         roadShape.moveTo(-width/2, 0);
@@ -659,6 +674,17 @@ export class Map {
         const length = direction.length();
         const center = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
         const angle = Math.atan2(direction.x, direction.z);
+        
+        // Store road segment data for passenger/destination placement
+        this.roadSegments.push({
+            start: { x: start.x, z: start.z },
+            end: { x: end.x, z: end.z },
+            width: width,
+            length: length,
+            angle: angle,
+            type: 'straight',
+            roadType: roadType
+        });
         
         // Create road surface
         const roadGeometry = new THREE.BoxGeometry(width, 0.01, length);
@@ -1273,8 +1299,324 @@ export class Map {
                 
                 this.scene.add(trunk);
                 this.scene.add(foliage);
+                
+                // Store tree data for collision detection
+                this.trees.push({
+                    position: new THREE.Vector3(x, 0, z),
+                    trunk: trunk,
+                    foliage: foliage,
+                    radius: 0.3,  // Collision radius
+                    height: treeHeight,
+                    foliageSize: foliageSize,
+                    isDestroyed: false
+                });
             }
         }
+        
+        // Also add random trees throughout the map
+        this.addRandomTrees(100); // Add 100 random trees
+    }
+    
+    addRandomTrees(count) {
+        const treeColors = [0x228B22, 0x006400, 0x008000]; // Different green colors
+        const mapSize = 500; // Adjust based on your map size
+        
+        for (let i = 0; i < count; i++) {
+            // Random position within map bounds
+            const x = (Math.random() * mapSize * 2) - mapSize;
+            const z = (Math.random() * mapSize * 2) - mapSize;
+            
+            // Don't place trees on roads or buildings
+            if (this.isPositionOnRoadOrBuilding(x, z)) {
+                continue;
+            }
+            
+            // Random tree properties
+            const treeHeight = 1.5 + Math.random() * 2.5;
+            const trunkWidth = 0.2 + Math.random() * 0.2;
+            const foliageSize = 1 + Math.random() * 1.2;
+            
+            // Create trunk
+            const trunkGeometry = new THREE.CylinderGeometry(trunkWidth * 0.8, trunkWidth, treeHeight, 6);
+            const trunkMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.set(x, treeHeight/2, z);
+            
+            // Create foliage (random green color)
+            const colorIndex = Math.floor(Math.random() * treeColors.length);
+            const foliageGeometry = new THREE.SphereGeometry(foliageSize, 8, 6);
+            const foliageMaterial = new THREE.MeshLambertMaterial({ color: treeColors[colorIndex] });
+            const foliage = new THREE.Mesh(foliageGeometry, foliageMaterial);
+            foliage.position.set(x, treeHeight + foliageSize/2, z);
+            
+            this.scene.add(trunk);
+            this.scene.add(foliage);
+            
+            // Store tree data
+            this.trees.push({
+                position: new THREE.Vector3(x, 0, z),
+                trunk: trunk,
+                foliage: foliage,
+                radius: trunkWidth,
+                height: treeHeight,
+                foliageSize: foliageSize,
+                isDestroyed: false
+            });
+        }
+    }
+    
+    isPositionOnRoadOrBuilding(x, z) {
+        const point = new THREE.Vector3(x, 0, z);
+        
+        // Check buildings
+        for (const building of this.buildings) {
+            const buildingPos = building.position;
+            const buildingSize = building.size;
+            
+            // Simple rectangular check
+            if (Math.abs(x - buildingPos.x) < (buildingSize.w / 2 + 2) && 
+                Math.abs(z - buildingPos.z) < (buildingSize.d / 2 + 2)) {
+                return true;
+            }
+        }
+        
+        // Check roads
+        for (const road of this.roadSegments) {
+            // Calculate distance from point to road segment
+            const roadStart = new THREE.Vector3(road.start.x, 0, road.start.z);
+            const roadEnd = new THREE.Vector3(road.end.x, 0, road.end.z);
+            
+            // Distance from point to line segment
+            const roadVector = new THREE.Vector3().subVectors(roadEnd, roadStart);
+            const pointVector = new THREE.Vector3().subVectors(point, roadStart);
+            
+            const roadLength = roadVector.length();
+            const roadDirection = roadVector.clone().normalize();
+            
+            const dotProduct = pointVector.dot(roadDirection);
+            
+            // Clamp projection to road segment
+            const projection = Math.max(0, Math.min(dotProduct, roadLength));
+            
+            // Point on road closest to the given point
+            const closestPoint = roadStart.clone().add(
+                roadDirection.multiplyScalar(projection)
+            );
+            
+            // Distance from point to road
+            const distance = point.distanceTo(closestPoint);
+            
+            if (distance < (road.width / 2 + 5)) { // Road width plus margin
+                return true;
+            }
+        }
+        
+        // Check roundabouts
+        if (this.roundabouts) {
+            for (const roundabout of this.roundabouts) {
+                const { center, radius } = roundabout;
+                const distance = Math.sqrt(
+                    Math.pow(x - center.x, 2) + Math.pow(z - center.z, 2)
+                );
+                
+                if (distance < (radius + 10)) { // Roundabout radius plus margin
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    // Add method to check collision between car and buildings/trees
+    checkCollisions(carPosition, carRadius) {
+        const collisions = {
+            buildings: [],
+            trees: []
+        };
+        
+        // Check building collisions
+        for (const building of this.buildings) {
+            const buildingPos = building.position;
+            const buildingSize = building.size;
+            
+            // Quick check using bounding circle
+            const distance = Math.sqrt(
+                Math.pow(carPosition.x - buildingPos.x, 2) + 
+                Math.pow(carPosition.z - buildingPos.z, 2)
+            );
+            
+            // If the car is close to the building, do more detailed check
+            if (distance < Math.max(buildingSize.w, buildingSize.d) / 2 + carRadius) {
+                // Detailed rectangle collision
+                const carX = carPosition.x;
+                const carZ = carPosition.z;
+                
+                // Adjust for rotation if building is rotated
+                const buildingRotY = building.rotation.y;
+                
+                // Transform car position to building's local space
+                const relX = carX - buildingPos.x;
+                const relZ = carZ - buildingPos.z;
+                
+                // Rotate point to align with building
+                const rotatedX = relX * Math.cos(-buildingRotY) - relZ * Math.sin(-buildingRotY);
+                const rotatedZ = relX * Math.sin(-buildingRotY) + relZ * Math.cos(-buildingRotY);
+                
+                // Check if point is inside the building's AABB (in local space)
+                if (Math.abs(rotatedX) < buildingSize.w / 2 + carRadius &&
+                    Math.abs(rotatedZ) < buildingSize.d / 2 + carRadius) {
+                    
+                    // Calculate collision normal
+                    let normalX = 0;
+                    let normalZ = 0;
+                    
+                    // Find closest face and set normal
+                    const distToLeft = Math.abs(rotatedX + buildingSize.w / 2);
+                    const distToRight = Math.abs(rotatedX - buildingSize.w / 2);
+                    const distToBottom = Math.abs(rotatedZ + buildingSize.d / 2);
+                    const distToTop = Math.abs(rotatedZ - buildingSize.d / 2);
+                    
+                    // Find smallest distance to determine the closest face
+                    const minDist = Math.min(distToLeft, distToRight, distToBottom, distToTop);
+                    
+                    if (minDist === distToLeft) {
+                        normalX = -1;
+                    } else if (minDist === distToRight) {
+                        normalX = 1;
+                    } else if (minDist === distToBottom) {
+                        normalZ = -1;
+                    } else {
+                        normalZ = 1;
+                    }
+                    
+                    // Rotate normal back to world space
+                    const worldNormalX = normalX * Math.cos(buildingRotY) - normalZ * Math.sin(buildingRotY);
+                    const worldNormalZ = normalX * Math.sin(buildingRotY) + normalZ * Math.cos(buildingRotY);
+                    
+                    collisions.buildings.push({
+                        object: building,
+                        normal: new THREE.Vector3(worldNormalX, 0, worldNormalZ).normalize(),
+                        position: buildingPos,
+                        penetration: minDist
+                    });
+                }
+            }
+        }
+        
+        // Check tree collisions
+        for (const tree of this.trees) {
+            if (tree.isDestroyed) continue;
+            
+            const treePos = tree.position;
+            const treeRadius = tree.radius;
+            
+            const distance = Math.sqrt(
+                Math.pow(carPosition.x - treePos.x, 2) + 
+                Math.pow(carPosition.z - treePos.z, 2)
+            );
+            
+            if (distance < treeRadius + carRadius) {
+                // Calculate collision normal
+                const normal = new THREE.Vector3(
+                    carPosition.x - treePos.x,
+                    0,
+                    carPosition.z - treePos.z
+                ).normalize();
+                
+                collisions.trees.push({
+                    object: tree,
+                    normal: normal,
+                    position: treePos,
+                    penetration: treeRadius + carRadius - distance
+                });
+            }
+        }
+        
+        return collisions;
+    }
+    
+    destroyTree(tree) {
+        if (tree.isDestroyed) return;
+        
+        // Mark tree as destroyed
+        tree.isDestroyed = true;
+        
+        // Create falling animation
+        const fallDirection = Math.random() * Math.PI * 2;
+        const fallSpeed = 2 + Math.random() * 2;
+        
+        // Create a group to hold the falling tree parts
+        const treeGroup = new THREE.Group();
+        this.scene.add(treeGroup);
+        
+        // Remove trunk and foliage from scene
+        this.scene.remove(tree.trunk);
+        this.scene.remove(tree.foliage);
+        
+        // Add them to the group
+        treeGroup.add(tree.trunk);
+        treeGroup.add(tree.foliage);
+        
+        // Reset positions relative to group
+        tree.trunk.position.set(0, tree.height / 2, 0);
+        tree.foliage.position.set(0, tree.height + tree.foliageSize / 2, 0);
+        
+        // Position group at tree position
+        treeGroup.position.copy(tree.position);
+        
+        // Animate falling
+        const fallAnimation = () => {
+            // Increase rotation to simulate falling
+            treeGroup.rotation.x += fallSpeed * 0.01;
+            
+            // If tree has fallen
+            if (treeGroup.rotation.x >= Math.PI / 2) {
+                // Stop animation
+                cancelAnimationFrame(tree.fallAnimationId);
+                
+                // After some time, remove the fallen tree
+                setTimeout(() => {
+                    this.scene.remove(treeGroup);
+                }, 10000); // Leave on ground for 10 seconds
+                
+                return;
+            }
+            
+            // Continue animation
+            tree.fallAnimationId = requestAnimationFrame(fallAnimation);
+        };
+        
+        // Set fall rotation axis
+        treeGroup.rotation.z = fallDirection;
+        
+        // Start animation
+        tree.fallAnimationId = requestAnimationFrame(fallAnimation);
+        
+        return treeGroup;
+    }
+
+    getRandomRoad() {
+        // Get a random road segment from the map
+        if (this.roadSegments.length === 0) {
+            console.error("No road segments available");
+            return null;
+        }
+        
+        // Filter to only include straight road segments (not intersections or curves)
+        const straightRoads = this.roadSegments.filter(
+            road => road.type === 'straight' && 
+            // Get a minimum length road for passenger placement
+            this.getDistance(road.start.x, road.start.z, road.end.x, road.end.z) > 20
+        );
+        
+        if (straightRoads.length === 0) {
+            // Fallback to any road segment if no straight ones are available
+            return this.roadSegments[Math.floor(Math.random() * this.roadSegments.length)];
+        }
+        
+        // Return a random straight road
+        return straightRoads[Math.floor(Math.random() * straightRoads.length)];
     }
 } 
 

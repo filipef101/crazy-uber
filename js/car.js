@@ -2,15 +2,14 @@ import * as THREE from 'three';
 
 // Car class - Yellow Taxi
 export class Car {
-    constructor(scene) {
+    constructor(scene, particleSystem = null) {
         this.scene = scene;
-        
-        // Car properties
+        this.carMesh = null;
         this.position = new THREE.Vector3(0, 2.4, 0); // Adjusted for the new lower road height
         this.rotation = 0; // Rotation around Y axis in radians
         this.speed = 0;
         this.acceleration = 0;
-        this.maxSpeed = 50;
+        this.maxSpeed = 60;
         this.brakingForce = 20;
         this.accelerationForce = 20;
         this.turnSpeed = 2.0;
@@ -28,7 +27,19 @@ export class Car {
         this.maxLateralVelocity = 20; // Maximum side velocity during drift
         this.lastTurnDirection = 0; // Track last turn direction for drift
         
-        // Create a taxi cab mesh
+        // Collision properties
+        this.collisionRadius = 1.5; // Collision detection radius
+        this.isCrashed = false;
+        this.crashRecoveryTime = 0;
+        this.maxCrashRecoveryTime = 1.0; // Time to recover from crash in seconds
+        this.crashDamageLevel = 0; // Accumulate damage from crashes
+        this.maxDamageLevel = 5; // Maximum damage level before car is severely damaged
+        this.hasCollided = false; // Flag to track collision in current frame
+        
+        // Add particle system
+        this.particleSystem = particleSystem;
+        this.driftEffectTimer = 0;
+        
         this.createTaxiMesh();
     }
     
@@ -268,7 +279,21 @@ export class Car {
         this.rotation -= this.turnSpeed * turnMultiplier * 0.05;
     }
     
-    update(deltaTime) {
+    update(deltaTime, map) {
+        // Handle crash recovery
+        if (this.isCrashed) {
+            this.crashRecoveryTime -= deltaTime;
+            
+            if (this.crashRecoveryTime <= 0) {
+                this.isCrashed = false;
+                this.carMesh.rotation.x = 0; // Reset tilt
+            } else {
+                // If crashed, limit control
+                this.speed *= 0.95; // Slow down
+                return; // Skip regular physics update
+            }
+        }
+        
         // Apply acceleration
         this.speed += this.acceleration * deltaTime;
         
@@ -298,21 +323,47 @@ export class Car {
         // Update drift factor
         this.updateDrift(deltaTime);
         
+        // Store previous position for collision detection
+        const prevPosition = this.position.clone();
+        
         // Calculate movement with drift applied
         this.calculateMovement(deltaTime);
+        
+        // Check for collisions if map is provided
+        this.hasCollided = false;
+        if (map) {
+            const collisions = map.checkCollisions(this.position, this.collisionRadius);
+            
+            // Handle building collisions
+            if (collisions.buildings.length > 0) {
+                this.handleBuildingCollision(collisions.buildings[0], prevPosition);
+            }
+            
+            // Handle tree collisions
+            if (collisions.trees.length > 0) {
+                for (const treeCollision of collisions.trees) {
+                    this.handleTreeCollision(treeCollision, map, prevPosition);
+                }
+            }
+        }
         
         // Update car mesh
         this.carMesh.position.copy(this.position);
         this.carMesh.rotation.y = this.rotation;
         
         // Tilt car when drifting for visual effect
-        if (this.driftFactor > 0.1) {
+        if (this.driftFactor > 0.1 && !this.isCrashed) {
             // Calculate tilt based on drift factor and direction
             const tiltAngle = this.driftFactor * 0.1 * this.driftDirection;
             this.carMesh.rotation.z = tiltAngle;
-        } else {
+        } else if (!this.isCrashed) {
             // Reset tilt when not drifting
             this.carMesh.rotation.z = 0;
+        }
+        
+        // Apply damage effects
+        if (this.crashDamageLevel > 0) {
+            this.applyDamageEffects();
         }
     }
     
@@ -328,21 +379,22 @@ export class Car {
                 this.driftDirection = this.lastTurnDirection;
             }
             
-            // Calculate lateral velocity for drift
-            const directionVector = new THREE.Vector2(
-                Math.sin(this.rotation),
-                Math.cos(this.rotation)
-            );
-            
-            // Perpendicular vector (for side movement)
-            const perpVector = new THREE.Vector2(-directionVector.y, directionVector.x);
-            
             // Apply lateral force based on drift direction and factor
             const lateralForce = this.driftFactor * this.speed * this.driftDirection;
             
             // Update lateral velocity with some decay
-            this.lateralVelocity.x = perpVector.x * lateralForce;
-            this.lateralVelocity.y = perpVector.y * lateralForce;
+            this.lateralVelocity.x += lateralForce * deltaTime * 0.2;
+            this.lateralVelocity.y += lateralForce * deltaTime * 0.2;
+            
+            // Reduce speed during drift for better handling
+            // More pronounced speed reduction with higher drift factor
+            const speedReductionFactor = 0.6 + (this.driftFactor * 0.3); // 0.6-0.9 range
+            
+            // Apply speed reduction based on drift intensity
+            this.speed *= Math.pow(speedReductionFactor, deltaTime * 2);
+            
+            // Apply additional drag when drifting
+            this.speed -= (this.speed * this.driftFactor * 0.5) * deltaTime;
         } else {
             // Gradually decrease drift factor when not drifting
             this.driftFactor = Math.max(0, this.driftFactor - this.driftRecoveryRate * deltaTime);
@@ -363,6 +415,29 @@ export class Car {
         if (lateralSpeed > this.maxLateralVelocity) {
             this.lateralVelocity.multiplyScalar(this.maxLateralVelocity / lateralSpeed);
         }
+        
+        // Create drift effects if drifting
+        if (this.driftFactor > 0.1 && this.speed > 10 && this.particleSystem) {
+            // Create drift smoke based on drift factor and speed
+            this.driftEffectTimer += deltaTime;
+            
+            // Only create effects at certain intervals
+            if (this.driftEffectTimer > 0.1) { // Every 0.1 seconds
+                this.driftEffectTimer = 0;
+                
+                // Create smoke particles
+                const driftIntensity = Math.min(this.driftFactor * (this.speed / this.maxSpeed), 1.0);
+                this.particleSystem.createDriftSmoke(this.position, driftIntensity);
+                
+                // Create skid marks
+                const directionVector = new THREE.Vector3(
+                    Math.sin(this.rotation),
+                    0,
+                    Math.cos(this.rotation)
+                );
+                this.particleSystem.createSkidMarks(this.position, directionVector, this.speed);
+            }
+        }
     }
     
     calculateMovement(deltaTime) {
@@ -381,6 +456,108 @@ export class Car {
         if (this.lateralVelocity.length() > 0.1) {
             this.position.x += this.lateralVelocity.x * deltaTime;
             this.position.z += this.lateralVelocity.y * deltaTime;
+        }
+    }
+    
+    handleBuildingCollision(collision, prevPosition) {
+        // Set collision flag
+        this.hasCollided = true;
+        
+        // Increase damage level
+        this.crashDamageLevel = Math.min(this.maxDamageLevel, this.crashDamageLevel + Math.abs(this.speed) * 0.05);
+        
+        // If hitting at high speed, trigger a crash 
+        if (Math.abs(this.speed) > 20) {
+            this.triggerCrash();
+            
+            // Create collision particles
+            if (this.particleSystem) {
+                this.particleSystem.createCollisionParticles(this.position, collision.normal);
+            }
+        }
+        
+        // Bounce effect - reflect some of the velocity
+        this.speed *= -0.3; // Reverse and reduce speed
+        
+        // Reset position to just outside collision
+        const pushBackDistance = collision.penetration + 0.1;
+        this.position.x = prevPosition.x + collision.normal.x * pushBackDistance;
+        this.position.z = prevPosition.z + collision.normal.z * pushBackDistance;
+        
+        // Add velocity in normal direction to bounce away
+        this.lateralVelocity.x += collision.normal.x * 5;
+        this.lateralVelocity.y += collision.normal.z * 5;
+    }
+    
+    handleTreeCollision(collision, map, prevPosition) {
+        // Set collision flag
+        this.hasCollided = true;
+        
+        // Get tree from collision
+        const tree = collision.object;
+        
+        // Check speed to determine if tree should be destroyed
+        if (Math.abs(this.speed) > 15) {
+            // Tree destruction
+            map.destroyTree(tree);
+            
+            // Slightly slow down the car
+            this.speed *= 0.8;
+            
+            // Play tree destruction effect
+            if (this.particleSystem) {
+                this.particleSystem.createTreeDestructionParticles(tree.position);
+            }
+        } else {
+            // Bounce off the tree
+            this.speed *= -0.2; // Reverse and reduce speed
+            
+            // Push back position
+            const pushBackDistance = collision.penetration + 0.1;
+            this.position.x = prevPosition.x + collision.normal.x * pushBackDistance;
+            this.position.z = prevPosition.z + collision.normal.z * pushBackDistance;
+            
+            // Create small collision particles
+            if (this.particleSystem) {
+                this.particleSystem.createCollisionParticles(tree.position, collision.normal, 0.5);
+            }
+        }
+    }
+    
+    triggerCrash() {
+        if (this.isCrashed) return; // Already crashed
+        
+        this.isCrashed = true;
+        this.crashRecoveryTime = this.maxCrashRecoveryTime;
+        
+        // Tilt car forward to show crash
+        this.carMesh.rotation.x = 0.1;
+        
+        // Stop drifting
+        this.isDrifting = false;
+        this.driftFactor = 0;
+        
+        // Play crash sound (implemented in sound system)
+        // if (this.soundSystem) this.soundSystem.playCrashSound();
+    }
+    
+    applyDamageEffects() {
+        // Apply visual damage effects based on crashDamageLevel
+        // These effects become more pronounced as damage increases
+        
+        // Damage level normalized to 0-1
+        const damageNorm = this.crashDamageLevel / this.maxDamageLevel;
+        
+        // Reduce max speed based on damage
+        const speedReduction = 20 * damageNorm;
+        this.maxSpeed = 60 - speedReduction;
+        
+        // Visual damage effects (can be expanded later)
+        if (damageNorm > 0.7) {
+            // Severe damage - could add smoke particles
+            if (this.particleSystem && Math.random() < damageNorm * 0.1) {
+                this.particleSystem.createSmokeParticles(this.position, 0.2);
+            }
         }
     }
 } 

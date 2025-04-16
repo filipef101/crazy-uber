@@ -5,26 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Crazy Uber</title>
     <link rel="stylesheet" href="styles.css">
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
 </head>
 <body>
     <div id="game-container"></div>
     <div id="ui-overlay">
-        <div id="score">Score: 0</div>
-        <div id="time">Time: 60</div>
+        <div id="game-title">
+            <h1>CRAZY UBER</h1>
+            <p>Pick up passengers and deliver them to earn money!</p>
+            <p>Use arrow keys to drive. Hold SPACE to drift.</p>
+            <button id="start-game" type="button">START GAME</button>
+        </div>
     </div>
-    
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-            }
-        }
-    </script>
-    <script>
-        console.log("Script section loaded");
-    </script>
-    
     <script type="module" src="main.js"></script>
 </body>
 </html>

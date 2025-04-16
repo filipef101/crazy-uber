@@ -3,11 +3,24 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Car } from './js/car.js';
 import { Map } from './js/world/map.js';
 import { Controls } from './js/controls.js';
+import { MissionManager } from './js/game/mission.js';
+import { HUD } from './js/ui/hud.js';
+import { ScoreManager } from './js/game/scoring.js';
+import { GameTimer } from './js/game/timer.js';
+import { ParticleSystem } from './js/effects/particles.js';
 
 // Game class
 export class Game {
     constructor(containerId) {
+        console.log('Game constructor called with container:', containerId);
         this.container = document.getElementById(containerId);
+        console.log('Found container:', this.container);
+        
+        if (!this.container) {
+            console.error(`Container element with id '${containerId}' not found!`);
+            return; // Exit constructor if container not found
+        }
+        
         this.width = window.innerWidth;
         this.height = window.innerHeight;
         
@@ -30,7 +43,11 @@ export class Game {
         // Set lowest possible pixel ratio
         this.renderer.setPixelRatio(1);
         
+        // Make sure we're appending to the container
+        console.log('Appending renderer to container');
+        this.container.innerHTML = ''; // Clear any existing content
         this.container.appendChild(this.renderer.domElement);
+        console.log('Renderer appended successfully');
         
         // Set up scene
         this.scene = new THREE.Scene();
@@ -55,10 +72,19 @@ export class Game {
         // Add lights - simplified for performance
         this.setupLights();
         
+        // Create effects systems
+        this.particleSystem = new ParticleSystem(this.scene);
+        
         // Create game elements
         this.map = new Map(this.scene);
-        this.car = new Car(this.scene);
+        this.car = new Car(this.scene, this.particleSystem);
         this.controls = new Controls(this.car);
+        
+        // Add gameplay systems
+        this.missionManager = new MissionManager(this.scene, this.map);
+        this.scoreManager = new ScoreManager();
+        this.gameTimer = new GameTimer(90); // 90 seconds starting time
+        this.hud = new HUD();
         
         // Set up minimap
         this.setupMinimap();
@@ -84,11 +110,19 @@ export class Game {
                 this.debugMode = !this.debugMode;
                 this.orbitControls.enabled = this.debugMode;
             }
+            
+            // Toggle minimap when 'm' is pressed
+            if (e.key === 'm') {
+                this.toggleMinimap();
+            }
         });
         
         // Display starting message
-        this.showMessage("Welcome to Crazy Uber! Use arrow keys to drive. Press 'D' for debug camera view.");
+        this.showMessage("Welcome to Crazy Uber! Use arrow keys to drive. Press 'D' for debug camera view. Press 'M' to toggle minimap.");
         setTimeout(() => this.hideMessage(), 5000);
+        
+        // Bind the animate method to preserve 'this' context
+        this.animate = this.animate.bind(this);
         
         console.log("Game initialized");
     }
@@ -118,6 +152,8 @@ export class Game {
         this.minimapContainer.style.backgroundColor = 'rgba(0,0,0,0.5)';
         this.minimapContainer.style.border = '2px solid white';
         this.minimapContainer.style.borderRadius = '5px';
+        // Hide minimap by default
+        this.minimapContainer.style.display = 'none';
         document.body.appendChild(this.minimapContainer);
         
         // Create minimap renderer
@@ -159,16 +195,21 @@ export class Game {
     }
     
     start() {
+        console.log('Game.start() called');
         this.isRunning = true;
         this.lastTime = performance.now();
+        console.log('Starting animation loop');
         this.animate();
         console.log("Game started");
     }
     
     animate() {
-        if (!this.isRunning) return;
+        if (!this.isRunning) {
+            console.warn('Animation loop stopped: isRunning is false');
+            return;
+        }
         
-        requestAnimationFrame(this.animate.bind(this));
+        requestAnimationFrame(this.animate);
         
         // Get actual time delta for smoother movement
         const currentTime = performance.now();
@@ -198,24 +239,67 @@ export class Game {
         // Update controls
         this.controls.update();
         
-        // Update car physics
-        this.car.update(delta);
+        // Update car physics with map for collision detection
+        this.car.update(delta, this.map);
+        
+        // Update effects
+        this.particleSystem.update(delta);
+        
+        // Get previous passenger state to detect dropoffs
+        const hadPassenger = this.missionManager.currentPassenger !== null;
+        const previousScore = this.missionManager.score;
+        
+        // Update gameplay systems
+        this.missionManager.update(delta, this.car.position);
+        this.scoreManager.update(delta);
+        this.gameTimer.update(delta);
+        
+        // Check if passenger was dropped off (detect score change in mission manager)
+        const currentScore = this.missionManager.score;
+        if (currentScore > previousScore) {
+            const fareAmount = currentScore - previousScore;
+            this.scoreManager.addFare(fareAmount);
+        }
+        
+        // Check if car is drifting for score bonuses
+        if (this.car.driftFactor > 0.3 && this.car.speed > 20) {
+            this.scoreManager.addDriftBonus(delta, this.car.driftFactor);
+        }
+        
+        // Check if the player has picked up or dropped off a passenger
+        const gameStats = this.missionManager.getGameStats();
+        
+        // Update the HUD
+        this.hud.update({
+            score: this.scoreManager.getScoreStats().totalScore,
+            timeRemaining: this.gameTimer.getTimeStats().timeRemaining,
+            isGameOver: this.gameTimer.getTimeStats().isGameOver
+        }, Math.round(1 / delta), this.missionManager.currentPassenger !== null);
+        
+        // Check for game over
+        if (this.gameTimer.getTimeStats().isGameOver && !this.isGameOver) {
+            this.isGameOver = true;
+            this.gameOver();
+        }
         
         // Update camera to follow car
         this.updateCamera();
     }
     
     updateMinimap() {
-        // Update player indicator position on minimap
-        this.playerIndicator.position.x = this.car.position.x;
-        this.playerIndicator.position.z = this.car.position.z;
-        this.playerIndicator.position.y = 0.5; // Slightly above ground
-        this.playerIndicator.rotation.y = this.car.rotation;
-        
-        // Add indicator right before rendering minimap, remove after rendering
-        this.scene.add(this.playerIndicator);
-        this.minimapRenderer.render(this.scene, this.minimapCamera);
-        this.scene.remove(this.playerIndicator); // Remove it immediately after rendering
+        // Only update minimap if it's visible
+        if (this.minimapContainer && this.minimapContainer.style.display !== 'none') {
+            // Update player indicator position on minimap
+            this.playerIndicator.position.x = this.car.position.x;
+            this.playerIndicator.position.z = this.car.position.z;
+            this.playerIndicator.position.y = 0.5; // Slightly above ground
+            this.playerIndicator.rotation.y = this.car.rotation;
+            
+            // Add indicator right before rendering minimap, remove after rendering
+            this.scene.add(this.playerIndicator);
+            this.minimapRenderer.render(this.scene, this.minimapCamera);
+            this.scene.remove(this.playerIndicator); // Remove it immediately after rendering
+        }
     }
     
     updateCamera() {
@@ -278,6 +362,24 @@ export class Game {
         const message = document.getElementById('game-message');
         if (message) {
             message.style.display = 'none';
+        }
+    }
+    
+    gameOver() {
+        // Show game over screen
+        this.hud.showGameOver(this.scoreManager.getScoreStats().totalScore);
+        
+        // Stop the game loop
+        this.isRunning = false;
+    }
+    
+    toggleMinimap() {
+        if (this.minimapContainer) {
+            if (this.minimapContainer.style.display === 'none') {
+                this.minimapContainer.style.display = 'block';
+            } else {
+                this.minimapContainer.style.display = 'none';
+            }
         }
     }
 } 
