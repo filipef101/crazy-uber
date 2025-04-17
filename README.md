@@ -4,7 +4,7 @@ A 3D driving game where you pick up passengers and deliver them to earn money.
 
 ## Play Online
 
-This game is automatically deployed to GitHub Pages: [Play Crazy Uber](https://your-username.github.io/crazy-uber/)
+This game is automatically deployed to GitHub Pages: [Play Crazy Uber](https://filipef101.github.io/crazy-uber/)
 
 ## Local Development
 
