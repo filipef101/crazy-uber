@@ -20,15 +20,7 @@ To run the game locally:
 
 ## Deployment
 
-This project is automatically deployed to GitHub Pages when changes are pushed to the main branch, using GitHub Actions.
-
-To set up GitHub Pages:
-
-1. Go to your repository settings
-2. Navigate to "Pages" in the sidebar
-3. Under "Build and deployment", select "GitHub Actions" as the source
-4. The workflow will automatically build and deploy your changes
-
+This project is automatically deployed to GitHub Pages when changes are pushed to the main branch, using GitHub pages 
 ## Game Controls
 
 - Arrow keys to drive
