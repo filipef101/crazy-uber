@@ -1,3 +1,5 @@
+import { TouchControls } from './ui/touchControls.js';
+
 // Controls class
 export class Controls {
     constructor(car) {
@@ -7,6 +9,9 @@ export class Controls {
         this.isTurningLeft = false;
         this.isTurningRight = false;
         this.isDriftKeyPressed = false;
+        
+        // Initialize touch controls for mobile devices
+        this.touchControls = new TouchControls(car);
         
         document.addEventListener('keydown', this.handleKeyDown.bind(this));
         document.addEventListener('keyup', this.handleKeyUp.bind(this));
@@ -63,6 +68,14 @@ export class Controls {
     }
     
     update() {
+        // If touch controls are active, let them handle all input
+        // This prevents conflicting inputs between touch and keyboard
+        if (this.touchControls && this.touchControls.isActive()) {
+            this.touchControls.update();
+            return; // Don't process keyboard input when touch is active
+        }
+        
+        // Process keyboard input only when touch is not active
         if (this.isAccelerating) {
             this.car.accelerate();
         } else if (this.isBraking) {
