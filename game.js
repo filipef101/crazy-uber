@@ -117,8 +117,16 @@ export class Game {
             }
         });
         
-        // Display starting message
-        this.showMessage("Welcome to Crazy Uber! Use arrow keys to drive. Press 'D' for debug camera view. Press 'M' to toggle minimap.");
+        // Display starting message - detect touch device for appropriate message
+        const isTouchDevice = ('ontouchstart' in window) || 
+                             (navigator.maxTouchPoints > 0) || 
+                             window.matchMedia("(pointer: coarse)").matches;
+        
+        if (isTouchDevice) {
+            this.showMessage("Welcome to Crazy Uber! Use on-screen buttons to drive. Hold 'DRIFT' to drift.");
+        } else {
+            this.showMessage("Welcome to Crazy Uber! Use arrow keys to drive. Press 'D' for debug camera view. Press 'M' to toggle minimap.");
+        }
         setTimeout(() => this.hideMessage(), 5000);
         
         // Bind the animate method to preserve 'this' context

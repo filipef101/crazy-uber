@@ -128,3 +128,38 @@ canvas {
 .time-warning {
     animation: blink 0.5s infinite;
 }
+
+/* Mobile/Desktop instruction switching */
+.desktop-instructions {
+    display: block;
+}
+
+.mobile-instructions {
+    display: none;
+}
+
+@media (pointer: coarse), (hover: none) {
+    .desktop-instructions {
+        display: none;
+    }
+    
+    .mobile-instructions {
+        display: block;
+    }
+}
+
+/* Touch controls responsive sizing */
+@media (max-width: 600px) {
+    #game-title h1 {
+        font-size: 2.5rem;
+    }
+    
+    #game-title p {
+        font-size: 1rem;
+    }
+    
+    #start-game {
+        font-size: 1.2rem;
+        padding: 0.8rem 1.5rem;
+    }
+}
