@@ -68,19 +68,19 @@ export class Controls {
     }
     
     update() {
-        // Update touch controls if available and active
+        // If touch controls are active, let them handle all input
+        // This prevents conflicting inputs between touch and keyboard
         if (this.touchControls && this.touchControls.isActive()) {
             this.touchControls.update();
-            // Touch controls handle their own car inputs, so only process keyboard if no touch
-            // But we still allow keyboard to work alongside touch for testing
+            return; // Don't process keyboard input when touch is active
         }
         
+        // Process keyboard input only when touch is not active
         if (this.isAccelerating) {
             this.car.accelerate();
         } else if (this.isBraking) {
             this.car.brake();
-        } else if (!this.touchControls || !this.touchControls.isActive()) {
-            // Only set idle from keyboard if touch is not active
+        } else {
             this.car.idle();
         }
 
